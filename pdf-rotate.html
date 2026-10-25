@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>旋转 PDF 页面</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    background: #fafafa;
+    margin: 0;
+    padding: 24px;
+    color: #333;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .drop {
+    border: 2px dashed #bbb;
+    border-radius: 6px;
+    padding: 32px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.2s;
+  }
+  .drop:hover, .drop.over {
+    border-color: #4a90d9;
+    background: #f0f7ff;
+    color: #4a90d9;
+  }
+  .drop input { display: none; }
+  .mode {
+    margin-top: 16px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 16px;
+    display: none;
+  }
+  .mode .row {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .mode .row:last-child { margin-bottom: 0; }
+  .mode label { cursor: pointer; user-select: none; }
+  .mode input[type="text"] {
+    padding: 6px 10px;
+    font-size: 13px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    width: 220px;
+  }
+  .hint { font-size: 12px; color: #999; }
+  .toolbar {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 9px 18px;
+    background: #4a90d9;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #357ab8; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.ghost {
+    background: #fff;
+    color: #4a90d9;
+    border: 1px solid #4a90d9;
+  }
+  button.ghost:hover { background: #f0f7ff; }
+  #status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    display: none;
+    line-height: 1.6;
+  }
+  #status.loading { display: block; background: #e8f4fd; color: #2a6fa8; }
+  #status.error   { display: block; background: #fdecea; color: #c0392b; }
+  #status.success { display: block; background: #eafaf1; color: #27ae60; }
+  #info {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #555;
+    line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".pdf">
+    <div>点击选择 PDF，或拖到这里</div>
+  </div>
+
+  <div id="info"></div>
+
+  <div class="mode" id="modeBox">
+    <div class="row">
+      <strong>应用到：</strong>
+      <label><input type="radio" name="scope" value="all" checked> 所有页面</label>
+      <label><input type="radio" name="scope" value="range"> 指定页码</label>
+      <input type="text" id="rangeInput" placeholder="例如：1-3,5,7" style="display:none;">
+    </div>
+    <div class="row">
+      <strong>旋转：</strong>
+      <button class="ghost" data-deg="90">顺时针 90°</button>
+      <button class="ghost" data-deg="-90">逆时针 90°</button>
+      <button class="ghost" data-deg="180">180°</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="ghost" id="clearBtn" disabled>清空</button>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+<script>
+(function () {
+  var drop      = document.getElementById('drop');
+  var fileEl    = document.getElementById('file');
+  var clearBtn  = document.getElementById('clearBtn');
+  var statusEl  = document.getElementById('status');
+  var infoEl    = document.getElementById('info');
+  var modeBox   = document.getElementById('modeBox');
+  var rangeInput= document.getElementById('rangeInput');
+
+  var picked = null;
+  var pageCount = 0;
+
+  function setStatus(type, msg) {
+    statusEl.className = type;
+    statusEl.textContent = msg;
+  }
+  function clearStatus() {
+    statusEl.className = '';
+    statusEl.textContent = '';
+  }
+
+  // scope 切换
+  document.querySelectorAll('input[name="scope"]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      rangeInput.style.display = r.value === 'range' && r.checked ? 'inline-block' : 'none';
+    });
+  });
+
+  // 选择文件
+  drop.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function (e) {
+    if (e.target.files.length) pick(e.target.files[0]);
+  });
+  ['dragenter', 'dragover'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) pick(e.dataTransfer.files[0]);
+  });
+
+  async function pick(f) {
+    if (!/\.pdf$/i.test(f.name)) {
+      setStatus('error', '只支持 .pdf 文件');
+      return;
+    }
+    picked = f;
+    pageCount = 0;
+    infoEl.textContent = '';
+    modeBox.style.display = 'none';
+    clearBtn.disabled = false;
+
+    try {
+      setStatus('loading', '正在读取 PDF 信息…');
+      var buf = await f.arrayBuffer();
+      var pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+      pageCount = pdf.getPageCount();
+      infoEl.innerHTML =
+        '<strong>' + f.name + '</strong> · 共 ' + pageCount + ' 页';
+      modeBox.style.display = 'block';
+      setStatus('success', '选择旋转方向即可开始');
+    } catch (err) {
+      console.error(err);
+      setStatus('error', '无法读取 PDF：' + (err.message || err));
+    }
+  }
+
+  clearBtn.addEventListener('click', function () {
+    picked = null;
+    pageCount = 0;
+    infoEl.textContent = '';
+    modeBox.style.display = 'none';
+    clearBtn.disabled = true;
+    clearStatus();
+    fileEl.value = '';
+  });
+
+  function parseRange(str, max) {
+    var pages = [];
+    str.split(',').forEach(function (part) {
+      part = part.trim();
+      if (!part) return;
+      var m = part.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (m) {
+        var a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+        if (a > b) { var t = a; a = b; b = t; }
+        for (var i = a; i <= b; i++) {
+          if (i >= 1 && i <= max) pages.push(i - 1);
+        }
+      } else if (/^\d+$/.test(part)) {
+        var n = parseInt(part, 10);
+        if (n >= 1 && n <= max) pages.push(n - 1);
+      }
+    });
+    return pages;
+  }
+
+  // 旋转按钮
+  document.querySelectorAll('button[data-deg]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      if (!picked) return;
+      var deg = parseInt(btn.dataset.deg, 10);
+
+      var scope = document.querySelector('input[name="scope"]:checked').value;
+      var idxs;
+      if (scope === 'all') {
+        idxs = null; // null 表示全部
+      } else {
+        var str = rangeInput.value.trim();
+        if (!str) {
+          setStatus('error', '请输入要旋转的页码范围');
+          return;
+        }
+        idxs = parseRange(str, pageCount);
+        if (idxs.length === 0) {
+          setStatus('error', '页码范围无效或超出总页数');
+          return;
+        }
+      }
+
+      try {
+        setStatus('loading', '正在旋转页面…');
+        var buf = await picked.file ? null : null; // 占位，下面重读
+        buf = await picked.arrayBuffer();
+        var pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+        var pages = pdf.getPages();
+
+        if (idxs === null) {
+          pages.forEach(function (p) {
+            var cur = p.getRotation().angle;
+            p.setRotation(PDFLib.degrees(cur + deg));
+          });
+        } else {
+          idxs.forEach(function (i) {
+            var p = pages[i];
+            var cur = p.getRotation().angle;
+            p.setRotation(PDFLib.degrees(cur + deg));
+          });
+        }
+
+        var bytes = await pdf.save();
+        var blob = new Blob([bytes], { type: 'application/pdf' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = picked.name.replace(/\.pdf$/i, '') + '-rotated.pdf';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+
+        setStatus('success', '旋转完成，PDF 已开始下载');
+      } catch (err) {
+        console.error(err);
+        setStatus('error', '失败：' + (err.message || err));
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Word 转 PDF</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    background: #fafafa;
+    margin: 0;
+    padding: 24px;
+    color: #333;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .drop {
+    border: 2px dashed #bbb;
+    border-radius: 6px;
+    padding: 36px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.2s;
+  }
+  .drop:hover, .drop.over {
+    border-color: #4a90d9;
+    background: #f0f7ff;
+    color: #4a90d9;
+  }
+  .drop input { display: none; }
+  button {
+    margin-top: 16px;
+    padding: 9px 22px;
+    background: #4a90d9;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #357ab8; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  #status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    display: none;
+    line-height: 1.6;
+  }
+  #status.loading { display: block; background: #e8f4fd; color: #2a6fa8; }
+  #status.error   { display: block; background: #fdecea; color: #c0392b; }
+  #status.success { display: block; background: #eafaf1; color: #27ae60; }
+  #preview {
+    margin-top: 20px;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    padding: 20px;
+    max-height: 360px;
+    overflow-y: auto;
+    display: none;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  #preview table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  #preview td, #preview th { border: 1px solid #ddd; padding: 5px 9px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".docx">
+    <div>点击选择 .docx，或拖到这里</div>
+  </div>
+  <button id="btn" disabled>开始转换</button>
+  <div id="status"></div>
+  <div id="preview"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+<script>
+(function () {
+  var drop    = document.getElementById('drop');
+  var fileEl  = document.getElementById('file');
+  var btn     = document.getElementById('btn');
+  var statusEl= document.getElementById('status');
+  var preview = document.getElementById('preview');
+
+  var picked = null;
+
+  function setStatus(type, msg) {
+    statusEl.className = type;
+    statusEl.textContent = msg;
+  }
+
+  drop.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function (e) {
+    if (e.target.files.length) pick(e.target.files[0]);
+  });
+  ['dragenter','dragover'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.add('over');
+    });
+  });
+  ['dragleave','drop'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) pick(e.dataTransfer.files[0]);
+  });
+
+  function pick(f) {
+    if (!/\.docx$/i.test(f.name)) {
+      setStatus('error', '只支持 .docx 文件');
+      return;
+    }
+    picked = f;
+    btn.disabled = false;
+    setStatus('loading', '已选择：' + f.name);
+  }
+
+  btn.addEventListener('click', async function () {
+    if (!picked) return;
+    btn.disabled = true;
+    preview.style.display = 'none';
+    preview.innerHTML = '';
+
+    try {
+      setStatus('loading', '正在解析 Word…');
+      var buf = await picked.arrayBuffer();
+      var result = await mammoth.convertToHtml({ arrayBuffer: buf });
+      var html = result.value;
+      if (!html.trim()) throw new Error('文档内容为空');
+
+      preview.innerHTML = html;
+      preview.style.display = 'block';
+
+      setStatus('loading', '正在生成 PDF…');
+      await makePdf(preview, picked.name);
+
+      setStatus('success', '转换完成，PDF 已开始下载');
+    } catch (err) {
+      console.error(err);
+      setStatus('error', '失败：' + (err.message || err));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function makePdf(el, name) {
+    var jsPDF = window.jspdf.jsPDF;
+    var pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+    var pw = pdf.internal.pageSize.getWidth();
+    var ph = pdf.internal.pageSize.getHeight();
+    var margin = 40;
+    var cw = pw - margin * 2;
+
+    var host = document.createElement('div');
+    host.style.position = 'fixed';
+    host.style.left = '-99999px';
+    host.style.top = '0';
+    host.style.width = cw + 'px';
+    host.style.background = '#fff';
+    host.style.fontFamily = '"Microsoft YaHei","SimSun",sans-serif';
+    host.style.fontSize = '12pt';
+    host.style.lineHeight = '1.6';
+    host.style.color = '#000';
+    host.innerHTML = el.innerHTML;
+    document.body.appendChild(host);
+
+    try {
+      var canvas = await html2canvas(host, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+      var img = canvas.toDataURL('image/jpeg', 0.92);
+      var iw = cw;
+      var ih = canvas.height * iw / canvas.width;
+
+      var remain = ih;
+      var pos = 0;
+      var pageH = ph - margin * 2;
+
+      while (remain > 0) {
+        pdf.addImage(img, 'JPEG', margin, margin - pos, iw, ih);
+        remain -= pageH;
+        pos += pageH;
+        if (remain > 0) pdf.addPage();
+      }
+
+      pdf.save(name.replace(/\.docx$/i, '') + '.pdf');
+    } finally {
+      document.body.removeChild(host);
+    }
+  }
+})();
+</script>
+</body>
+</html>

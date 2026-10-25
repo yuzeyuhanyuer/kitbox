@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>图片转 PDF</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    background: #fafafa;
+    margin: 0;
+    padding: 24px;
+    color: #333;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  .drop {
+    border: 2px dashed #bbb;
+    border-radius: 6px;
+    padding: 36px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.2s;
+  }
+  .drop:hover, .drop.over {
+    border-color: #4a90d9;
+    background: #f0f7ff;
+    color: #4a90d9;
+  }
+  .drop input { display: none; }
+
+  .toolbar {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  button {
+    padding: 9px 18px;
+    background: #4a90d9;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #357ab8; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.ghost {
+    background: #fff;
+    color: #4a90d9;
+    border: 1px solid #4a90d9;
+  }
+  button.ghost:hover { background: #f0f7ff; }
+  button.danger {
+    background: #fff;
+    color: #c0392b;
+    border: 1px solid #c0392b;
+  }
+  button.danger:hover { background: #fdecea; }
+
+  .options {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #555;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .options label { cursor: pointer; user-select: none; }
+  .options select {
+    padding: 4px 8px;
+    font-size: 13px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+  }
+
+  #status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    display: none;
+    line-height: 1.6;
+  }
+  #status.loading { display: block; background: #e8f4fd; color: #2a6fa8; }
+  #status.error   { display: block; background: #fdecea; color: #c0392b; }
+  #status.success { display: block; background: #eafaf1; color: #27ae60; }
+
+  #list {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .item {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+    cursor: grab;
+    transition: box-shadow 0.15s, transform 0.15s;
+  }
+  .item:active { cursor: grabbing; }
+  .item.dragging {
+    opacity: 0.4;
+    transform: scale(0.97);
+  }
+  .item.drop-target {
+    box-shadow: 0 0 0 2px #4a90d9 inset;
+  }
+  .item .thumb {
+    width: 100%;
+    height: 110px;
+    object-fit: cover;
+    display: block;
+    background: #f0f0f0;
+  }
+  .item .meta {
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .item .idx {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .item .remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(192,57,43,0.85);
+    color: #fff;
+    border: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    display: none;
+  }
+  .item:hover .remove { display: block; }
+  .empty-tip {
+    margin-top: 18px;
+    text-align: center;
+    color: #bbb;
+    font-size: 13px;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" multiple>
+    <div>点击选择图片，或拖到这里（可多选）</div>
+  </div>
+
+  <div class="toolbar">
+    <button id="convertBtn" disabled>生成 PDF</button>
+    <button class="ghost" id="clearBtn" disabled>清空</button>
+  </div>
+
+  <div class="options">
+    <label>
+      页面：
+      <select id="pageSize">
+        <option value="fit">适应图片尺寸</option>
+        <option value="a4" selected>A4</option>
+        <option value="letter">Letter</option>
+      </select>
+    </label>
+    <label>
+      方向：
+      <select id="orientation">
+        <option value="auto" selected>自动（跟随图片）</option>
+        <option value="portrait">纵向</option>
+        <option value="landscape">横向</option>
+      </select>
+    </label>
+    <label>
+      边距：
+      <select id="margin">
+        <option value="0">无</option>
+        <option value="20" selected>小</option>
+        <option value="40">中</option>
+        <option value="60">大</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="status"></div>
+  <div id="list"></div>
+  <div class="empty-tip" id="emptyTip">还没有图片</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+<script>
+(function () {
+  var drop        = document.getElementById('drop');
+  var fileEl      = document.getElementById('file');
+  var convertBtn  = document.getElementById('convertBtn');
+  var clearBtn    = document.getElementById('clearBtn');
+  var statusEl    = document.getElementById('status');
+  var listEl      = document.getElementById('list');
+  var emptyTip    = document.getElementById('emptyTip');
+  var pageSizeEl  = document.getElementById('pageSize');
+  var orientEl    = document.getElementById('orientation');
+  var marginEl    = document.getElementById('margin');
+
+  // 每项：{ id, file, name, width, height, dataUrl }
+  var items = [];
+  var uid = 0;
+  var dragId = null;
+
+  function setStatus(type, msg) {
+    statusEl.className = type;
+    statusEl.textContent = msg;
+  }
+  function clearStatus() {
+    statusEl.className = '';
+    statusEl.textContent = '';
+  }
+
+  // ---------- 添加文件 ----------
+  drop.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function (e) {
+    if (e.target.files.length) addFiles(e.target.files);
+    fileEl.value = '';
+  });
+  ['dragenter', 'dragover'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+
+  async function addFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList).filter(function (f) {
+      return /^image\//.test(f.type);
+    });
+    if (files.length === 0) {
+      setStatus('error', '请选择图片文件');
+      return;
+    }
+
+    setStatus('loading', '正在读取 ' + files.length + ' 张图片…');
+
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var img = await loadImage(f);
+        items.push({
+          id: ++uid,
+          file: f,
+          name: f.name,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          dataUrl: img.src
+        });
+      } catch (err) {
+        console.error('读取失败：' + f.name, err);
+      }
+    }
+
+    clearStatus();
+    render();
+  }
+
+  function loadImage(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var img = new Image();
+        img.onload = function () { resolve(img); };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ---------- 渲染列表 ----------
+  function render() {
+    listEl.innerHTML = '';
+
+    if (items.length === 0) {
+      emptyTip.style.display = 'block';
+      convertBtn.disabled = true;
+      clearBtn.disabled = true;
+      return;
+    }
+    emptyTip.style.display = 'none';
+    convertBtn.disabled = false;
+    clearBtn.disabled = false;
+
+    items.forEach(function (item, index) {
+      var el = document.createElement('div');
+      el.className = 'item';
+      el.draggable = true;
+      el.dataset.id = item.id;
+
+      el.innerHTML =
+        '<span class="idx">' + (index + 1) + '</span>' +
+        '<button class="remove" title="移除">×</button>' +
+        '<img class="thumb" src="' + item.dataUrl + '" alt="">' +
+        '<div class="meta">' + item.name + ' · ' + item.width + '×' + item.height + '</div>';
+
+      // 移除
+      el.querySelector('.remove').addEventListener('click', function (e) {
+        e.stopPropagation();
+        items = items.filter(function (it) { return it.id !== item.id; });
+        render();
+      });
+
+      // 拖拽排序
+      el.addEventListener('dragstart', function (e) {
+        dragId = item.id;
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', String(item.id)); } catch (err) {}
+      });
+      el.addEventListener('dragend', function () {
+        dragId = null;
+        el.classList.remove('dragging');
+        Array.prototype.forEach.call(
+          listEl.querySelectorAll('.drop-target'),
+          function (n) { n.classList.remove('drop-target'); }
+        );
+      });
+      el.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        if (dragId === null || dragId === item.id) return;
+        el.classList.add('drop-target');
+      });
+      el.addEventListener('dragleave', function () {
+        el.classList.remove('drop-target');
+      });
+      el.addEventListener('drop', function (e) {
+        e.preventDefault();
+        el.classList.remove('drop-target');
+        if (dragId === null || dragId === item.id) return;
+
+        var fromIdx = items.findIndex(function (it) { return it.id === dragId; });
+        var toIdx   = items.findIndex(function (it) { return it.id === item.id; });
+        if (fromIdx < 0 || toIdx < 0) return;
+
+        var moved = items.splice(fromIdx, 1)[0];
+        items.splice(toIdx, 0, moved);
+        render();
+      });
+
+      listEl.appendChild(el);
+    });
+  }
+
+  // ---------- 清空 ----------
+  clearBtn.addEventListener('click', function () {
+    if (!confirm('清空所有图片？')) return;
+    items = [];
+    clearStatus();
+    render();
+  });
+
+  // ---------- 生成 PDF ----------
+  convertBtn.addEventListener('click', async function () {
+    if (items.length === 0) return;
+    convertBtn.disabled = true;
+
+    try {
+      setStatus('loading', '正在生成 PDF…');
+      var jsPDF = window.jspdf.jsPDF;
+      var pageSize = pageSizeEl.value;
+      var orientation = orientEl.value;
+      var margin = parseInt(marginEl.value, 10) || 0;
+
+      var pdf = null;
+
+      for (var i = 0; i < items.length; i++) {
+        setStatus('loading', '正在处理第 ' + (i + 1) + ' / ' + items.length + ' 张…');
+        var item = items[i];
+
+        var finalOrientation = orientation;
+        if (finalOrientation === 'auto') {
+          finalOrientation = item.width >= item.height ? 'landscape' : 'portrait';
+        }
+
+        var format;
+        if (pageSize === 'fit') {
+          // 适应图片尺寸：用图片长宽比换算成 pt
+          var baseW = 595.28;   // 以 A4 的 pt 宽为基准缩放
+          var ratio = item.height / item.width;
+          format = [baseW, baseW * ratio];
+          finalOrientation = baseW <= baseW * ratio ? 'portrait' : 'landscape';
+        } else if (pageSize === 'letter') {
+          format = 'letter';
+        } else {
+          format = 'a4';
+        }
+
+        if (!pdf) {
+          pdf = new jsPDF({
+            unit: 'pt',
+            format: format,
+            orientation: finalOrientation
+          });
+        } else {
+          pdf.addPage(format, finalOrientation);
+        }
+
+        var pw = pdf.internal.pageSize.getWidth();
+        var ph = pdf.internal.pageSize.getHeight();
+
+        var availW = pw - margin * 2;
+        var availH = ph - margin * 2;
+
+        var imgRatio = item.width / item.height;
+        var boxRatio = availW / availH;
+        var drawW, drawH;
+
+        if (imgRatio > boxRatio) {
+          // 宽度受限
+          drawW = availW;
+          drawH = availW / imgRatio;
+        } else {
+          // 高度受限
+          drawH = availH;
+          drawW = availH * imgRatio;
+        }
+
+        var x = margin + (availW - drawW) / 2;
+        var y = margin + (availH - drawH) / 2;
+
+        pdf.addImage(item.dataUrl, 'JPEG', x, y, drawW, drawH);
+      }
+
+      var fname = items.length === 1
+        ? items[0].name.replace(/\.[^.]+$/, '') + '.pdf'
+        : 'merged-' + Date.now() + '.pdf';
+
+      pdf.save(fname);
+      setStatus('success', '生成完成，PDF 已开始下载');
+    } catch (err) {
+      console.error(err);
+      setStatus('error', '失败：' + (err.message || err));
+    } finally {
+      convertBtn.disabled = false;
+    }
+  });
+
+  // 初始化
+  render();
+})();
+</script>
+</body>
+</html>

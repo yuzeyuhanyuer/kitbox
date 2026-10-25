@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具箱</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { display: flex; height: 100vh; font-family: "Microsoft YaHei", "SimSun", sans-serif; overflow: hidden; }
+
+  /* 侧边栏 */
+  #sidebar {
+    width: 200px;
+    background: #2c3e50;
+    color: #ecf0f1;
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  #sidebar h2 {
+    font-size: 15px;
+    padding: 18px 16px 10px;
+    color: #95a5a6;
+    font-weight: normal;
+    letter-spacing: 1px;
+  }
+  #toolList { flex: 1; }
+  .tool-item {
+    padding: 11px 18px;
+    cursor: pointer;
+    font-size: 14px;
+    border-left: 3px solid transparent;
+    transition: all 0.15s;
+  }
+  .tool-item:hover { background: #34495e; }
+  .tool-item.active {
+    background: #34495e;
+    border-left-color: #4a90d9;
+    color: #4a90d9;
+  }
+  .empty-tip {
+    padding: 16px 18px;
+    font-size: 13px;
+    color: #7f8c8d;
+    line-height: 1.6;
+  }
+
+  /* 主区域 */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #toolbar {
+    height: 46px;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    font-size: 15px;
+    color: #333;
+    flex-shrink: 0;
+  }
+  #frame { flex: 1; border: none; width: 100%; background: #fafafa; }
+  #empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #bdc3c7;
+    font-size: 15px;
+    background: #fafafa;
+  }
+</style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <h2>功能列表</h2>
+    <div id="toolList"></div>
+  </div>
+
+  <div id="main">
+    <div id="toolbar">请选择一个功能</div>
+    <div id="empty">从左侧选择要使用的功能</div>
+    <iframe id="frame" style="display:none;"></iframe>
+  </div>
+
+<script>
+(async function () {
+  const toolListEl = document.getElementById('toolList');
+  const frame      = document.getElementById('frame');
+  const emptyEl    = document.getElementById('empty');
+  const toolbarEl  = document.getElementById('toolbar');
+
+  let manifest;
+  try {
+    const res = await fetch('manifest.json?v=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    manifest = await res.json();
+  } catch (e) {
+    toolListEl.innerHTML =
+      '<div class="empty-tip">无法加载 manifest.json<br>' + e.message + '</div>';
+    return;
+  }
+
+  const tools = (manifest && manifest.tools) || [];
+
+  if (tools.length === 0) {
+    toolListEl.innerHTML =
+      '<div class="empty-tip">暂无功能<br><br>在 manifest.json 里添加后刷新</div>';
+    return;
+  }
+
+  tools.forEach(function (tool) {
+    const item = document.createElement('div');
+    item.className = 'tool-item';
+    item.textContent = tool.name;
+    item.dataset.id = tool.id;
+    item.addEventListener('click', function () { openTool(tool, item); });
+    toolListEl.appendChild(item);
+  });
+
+  function openTool(tool, itemEl) {
+    document.querySelectorAll('.tool-item').forEach(function (el) {
+      el.classList.remove('active');
+    });
+    itemEl.classList.add('active');
+
+    toolbarEl.textContent = tool.name;
+    emptyEl.style.display = 'none';
+    frame.style.display = 'block';
+    frame.src = tool.file;
+  }
+})();
+</script>
+</body>
+</html>

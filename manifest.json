@@ -1,0 +1,11 @@
+{
+  "tools": [
+    { "id": "word-to-pdf",    "name": "Word 转 PDF",     "file": "tools/word-to-pdf.html" },
+    { "id": "word-merge",     "name": "合并 Word",       "file": "tools/word-merge.html" },
+    { "id": "images-to-pdf",  "name": "图片转 PDF",       "file": "tools/images-to-pdf.html" },
+    { "id": "pdf-to-images",  "name": "PDF 拆分为图片",   "file": "tools/pdf-to-images.html" },
+    { "id": "pdf-merge",      "name": "合并 PDF",         "file": "tools/pdf-merge.html" },
+    { "id": "pdf-split",      "name": "拆分 PDF",         "file": "tools/pdf-split.html" },
+    { "id": "pdf-rotate",     "name": "旋转 PDF 页面",    "file": "tools/pdf-rotate.html" }
+  ]
+}

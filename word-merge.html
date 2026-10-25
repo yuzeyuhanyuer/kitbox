@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>合并 Word</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    background: #fafafa;
+    margin: 0;
+    padding: 24px;
+    color: #333;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .drop {
+    border: 2px dashed #bbb;
+    border-radius: 6px;
+    padding: 32px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.2s;
+  }
+  .drop:hover, .drop.over {
+    border-color: #4a90d9;
+    background: #f0f7ff;
+    color: #4a90d9;
+  }
+  .drop input { display: none; }
+  .toolbar {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 9px 18px;
+    background: #4a90d9;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #357ab8; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.ghost {
+    background: #fff;
+    color: #4a90d9;
+    border: 1px solid #4a90d9;
+  }
+  button.ghost:hover { background: #f0f7ff; }
+  #status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    display: none;
+    line-height: 1.6;
+  }
+  #status.loading { display: block; background: #e8f4fd; color: #2a6fa8; }
+  #status.error   { display: block; background: #fdecea; color: #c0392b; }
+  #status.success { display: block; background: #eafaf1; color: #27ae60; }
+  #list { margin-top: 18px; }
+  .item {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 5px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: grab;
+    transition: box-shadow 0.15s;
+  }
+  .item:active { cursor: grabbing; }
+  .item.dragging { opacity: 0.4; }
+  .item.drop-target { box-shadow: 0 0 0 2px #4a90d9 inset; }
+  .item .idx {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #4a90d9;
+    color: #fff;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .item .name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .size { font-size: 12px; color: #999; flex-shrink: 0; }
+  .item .remove {
+    background: transparent;
+    border: none;
+    color: #c0392b;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 6px;
+    line-height: 1;
+  }
+  .empty-tip {
+    text-align: center;
+    color: #bbb;
+    font-size: 13px;
+    padding: 20px;
+  }
+  .hint {
+    margin-top: 14px;
+    font-size: 12px;
+    color: #999;
+    line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".docx" multiple>
+    <div>点击选择 .docx 文件，或拖到这里（可多选，多次添加）</div>
+  </div>
+
+  <div class="toolbar">
+    <button id="mergeBtn" disabled>合并并下载</button>
+    <button class="ghost" id="clearBtn" disabled>清空</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="list"></div>
+  <div class="empty-tip" id="emptyTip">还没有文件</div>
+
+  <div class="hint">
+    说明：文件级合并，样式、颜色、表格、图片全部保留。<br>
+    样式表以第一个文档为准。仅支持 .docx（不支持 .doc）。
+  </div>
+</div>
+
+<!-- JSZip：解压与重打包 .docx -->
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+
+<script>
+(function () {
+  var drop      = document.getElementById('drop');
+  var fileEl    = document.getElementById('file');
+  var mergeBtn  = document.getElementById('mergeBtn');
+  var clearBtn  = document.getElementById('clearBtn');
+  var statusEl  = document.getElementById('status');
+  var listEl    = document.getElementById('list');
+  var emptyTip  = document.getElementById('emptyTip');
+
+  var items = [];
+  var uid = 0;
+  var dragId = null;
+
+  function setStatus(type, msg) {
+    statusEl.className = type;
+    statusEl.textContent = msg;
+  }
+  function clearStatus() {
+    statusEl.className = '';
+    statusEl.textContent = '';
+  }
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  // ---------- 文件选择 ----------
+  drop.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function (e) {
+    if (e.target.files.length) addFiles(e.target.files);
+    fileEl.value = '';
+  });
+  ['dragenter', 'dragover'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+
+  function addFiles(fileList) {
+    var added = 0;
+    Array.prototype.forEach.call(fileList, function (f) {
+      if (!/\.docx$/i.test(f.name)) return;
+      items.push({ id: ++uid, file: f, name: f.name, size: f.size });
+      added++;
+    });
+    if (added === 0) {
+      setStatus('error', '请选择 .docx 文件（不支持 .doc）');
+      return;
+    }
+    clearStatus();
+    render();
+  }
+
+  function render() {
+    listEl.innerHTML = '';
+
+    if (items.length === 0) {
+      emptyTip.style.display = 'block';
+      mergeBtn.disabled = true;
+      clearBtn.disabled = true;
+      return;
+    }
+    emptyTip.style.display = 'none';
+    mergeBtn.disabled = false;
+    clearBtn.disabled = false;
+
+    items.forEach(function (item, index) {
+      var el = document.createElement('div');
+      el.className = 'item';
+      el.draggable = true;
+      el.dataset.id = item.id;
+
+      el.innerHTML =
+        '<span class="idx">' + (index + 1) + '</span>' +
+        '<span class="name">' + item.name + '</span>' +
+        '<span class="size">' + fmtSize(item.size) + '</span>' +
+        '<button class="remove" title="移除">×</button>';
+
+      el.querySelector('.remove').addEventListener('click', function (e) {
+        e.stopPropagation();
+        items = items.filter(function (it) { return it.id !== item.id; });
+        render();
+      });
+
+      el.addEventListener('dragstart', function (e) {
+        dragId = item.id;
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', String(item.id)); } catch (err) {}
+      });
+      el.addEventListener('dragend', function () {
+        dragId = null;
+        el.classList.remove('dragging');
+        Array.prototype.forEach.call(
+          listEl.querySelectorAll('.drop-target'),
+          function (n) { n.classList.remove('drop-target'); }
+        );
+      });
+      el.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        if (dragId === null || dragId === item.id) return;
+        el.classList.add('drop-target');
+      });
+      el.addEventListener('dragleave', function () {
+        el.classList.remove('drop-target');
+      });
+      el.addEventListener('drop', function (e) {
+        e.preventDefault();
+        el.classList.remove('drop-target');
+        if (dragId === null || dragId === item.id) return;
+
+        var fromIdx = items.findIndex(function (it) { return it.id === dragId; });
+        var toIdx   = items.findIndex(function (it) { return it.id === item.id; });
+        if (fromIdx < 0 || toIdx < 0) return;
+
+        var moved = items.splice(fromIdx, 1)[0];
+        items.splice(toIdx, 0, moved);
+        render();
+      });
+
+      listEl.appendChild(el);
+    });
+  }
+
+  clearBtn.addEventListener('click', function () {
+    if (!confirm('清空所有文件？')) return;
+    items = [];
+    clearStatus();
+    render();
+  });
+
+  // ---------- 合并主流程 ----------
+  mergeBtn.addEventListener('click', async function () {
+    if (items.length === 0) return;
+    if (!window.JSZip) {
+      setStatus('error', 'JSZip 库未加载，请检查网络或强制刷新页面');
+      return;
+    }
+
+    mergeBtn.disabled = true;
+
+    try {
+      setStatus('loading', '正在读取第一个文档（作为样式基准）…');
+
+      // 1. 以第一个文档为基础
+      var baseFile = items[0].file;
+      var baseBuf  = await baseFile.arrayBuffer();
+      var baseZip  = await JSZip.loadAsync(baseBuf);
+      var parser   = new DOMParser();
+      var serializer = new XMLSerializer();
+
+      // 2. 读基础 document.xml
+      var baseDocXml = await baseZip.file('word/document.xml').async('string');
+      var baseDoc = parser.parseFromString(baseDocXml, 'application/xml');
+      var baseBody = baseDoc.getElementsByTagNameNS('*', 'body')[0];
+      if (!baseBody) throw new Error('第一个文档缺少 body，可能不是有效的 .docx');
+
+      // 保存基础文档的原始 sectPr（最终的页面设置）
+      var baseSectPr = null;
+      var bodyChildren = Array.prototype.slice.call(baseBody.childNodes);
+      bodyChildren.forEach(function (n) {
+        if (n.nodeType === 1 && n.localName === 'sectPr') {
+          baseSectPr = n;
+        }
+      });
+
+      // 清空 baseBody 的内容，稍后依次填入每个文档的正文
+      // 但要保留 baseSectPr，最后放回
+      Array.prototype.slice.call(baseBody.childNodes).forEach(function (n) {
+        baseBody.removeChild(n);
+      });
+
+      // 3. 收集图片重命名映射，及要合并的 rels
+      var baseRelsXml = await baseZip.file('word/_rels/document.xml.rels').async('string');
+      var baseRelsDoc = parser.parseFromString(baseRelsXml, 'application/xml');
+      var baseRelsRoot = baseRelsDoc.documentElement;
+
+      // 已用 rId 集合，避免冲突
+      var usedRIds = {};
+      Array.prototype.forEach.call(
+        baseRelsRoot.getElementsByTagNameNS('*', 'Relationship'),
+        function (r) { usedRIds[r.getAttribute('Id')] = true; }
+      );
+
+      // 生成一个新的 rId
+      function nextRId() {
+        var i = 1;
+        while (usedRIds['rId' + i]) i++;
+        usedRIds['rId' + i] = true;
+        return 'rId' + i;
+      }
+
+      // 4. 逐文档处理
+      for (var di = 0; di < items.length; di++) {
+        setStatus('loading', '正在合并：' + items[di].name +
+          '（' + (di + 1) + ' / ' + items.length + '）');
+
+        var buf = await items[di].file.arrayBuffer();
+        var zip = await JSZip.loadAsync(buf);
+
+        // 读 document.xml
+        var docXmlFile = zip.file('word/document.xml');
+        if (!docXmlFile) continue;
+        var docXml = await docXmlFile.async('string');
+        var doc = parser.parseFromString(docXml, 'application/xml');
+        var body = doc.getElementsByTagNameNS('*', 'body')[0];
+        if (!body) continue;
+
+        // 读 rels（可选）
+        var relsFile = zip.file('word/_rels/document.xml.rels');
+        var relsDoc = null;
+        if (relsFile) {
+          var relsXml = await relsFile.async('string');
+          relsDoc = parser.parseFromString(relsXml, 'application/xml');
+        }
+
+        // 建立旧 rId → 新 rId 的映射，同时搬运图片
+        var rIdMap = {};
+        if (relsDoc) {
+          var relsList = Array.prototype.slice.call(
+            relsDoc.getElementsByTagNameNS('*', 'Relationship')
+          );
+          for (var ri = 0; ri < relsList.length; ri++) {
+            var rel = relsList[ri];
+            var oldId = rel.getAttribute('Id');
+            var type  = rel.getAttribute('Type') || '';
+            var target= rel.getAttribute('Target') || '';
+
+            // 只搬运图片（Type 里含 /image）
+            if (/\/image$/i.test(type)) {
+              var newId = nextRId();
+
+              // 找到 zip 里的图片路径
+              var imgPath = 'word/' + target.replace(/^\.\.\//, '');
+              var imgFile = zip.file(imgPath);
+              if (imgFile) {
+                var imgData = await imgFile.async('uint8array');
+                // 重命名，避免和基础文档的图片冲突
+                var ext = (imgPath.match(/\.[^.]+$/) || ['.png'])[0];
+                var newName = 'merged_' + di + '_' + ri + ext;
+                baseZip.file('word/media/' + newName, imgData);
+
+                // 在 base rels 里加一条新关系
+                var newRel = baseRelsDoc.createElementNS(
+                  baseRelsRoot.namespaceURI, 'Relationship'
+                );
+                newRel.setAttribute('Id', newId);
+                newRel.setAttribute('Type', type);
+                newRel.setAttribute('Target', 'media/' + newName);
+                baseRelsRoot.appendChild(newRel);
+
+                rIdMap[oldId] = newId;
+              } else {
+                rIdMap[oldId] = oldId;
+              }
+            } else {
+              // 非图片关系（样式、编号、字体等）不搬运，
+              // 让引用它的 XML 失效，由 Word 打开时自动忽略
+              rIdMap[oldId] = oldId;
+            }
+          }
+        }
+
+        // 替换文档内的 r:id 引用
+        var allElements = body.getElementsByTagName('*');
+        Array.prototype.forEach.call(allElements, function (el) {
+          Array.prototype.forEach.call(el.attributes || [], function (attr) {
+            if (attr.name === 'r:id' || attr.localName === 'id') {
+              if (attr.namespaceURI &&
+                  attr.namespaceURI.indexOf('relationships') >= 0) {
+                var old = attr.value;
+                if (rIdMap[old]) attr.value = rIdMap[old];
+              }
+            }
+          });
+        });
+
+        // 5. 把该文档 body 的子节点搬到 baseBody
+        //    移除该文档自己的 sectPr，改成段内 sectPr，实现分节
+        var sectPr = null;
+        var nodes = Array.prototype.slice.call(body.childNodes);
+        nodes.forEach(function (n) {
+          if (n.nodeType === 1 && n.localName === 'sectPr') {
+            sectPr = n;
+          } else if (n.nodeType === 1 || n.nodeType === 3) {
+            // 导入到 baseDoc 的文档上下文
+            baseBody.appendChild(baseDoc.importNode(n, true));
+          }
+        });
+
+        // 如果不是最后一个文档，加一个分页分隔（sectPr 或分页符）
+        // 简化处理：在末尾加一个分页符，保证每个文档另起一页
+        if (di < items.length - 1) {
+          var pageBreakP = baseDoc.createElementNS(
+            'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+            'w:p'
+          );
+          var run = baseDoc.createElementNS(
+            'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+            'w:r'
+          );
+          var br = baseDoc.createElementNS(
+            'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+            'w:br'
+          );
+          br.setAttribute('w:type', 'page');
+          run.appendChild(br);
+          pageBreakP.appendChild(run);
+          baseBody.appendChild(pageBreakP);
+        }
+      }
+
+      // 6. 把基础文档的 sectPr 放回 body 末尾
+      if (baseSectPr) {
+        baseBody.appendChild(baseSectPr);
+      }
+
+      // 7. 写回 document.xml
+      var newDocXml = serializer.serializeToString(baseDoc);
+      baseZip.file('word/document.xml', newDocXml);
+
+      // 8. 写回 rels
+      var newRelsXml = serializer.serializeToString(baseRelsDoc);
+      baseZip.file('word/_rels/document.xml.rels', newRelsXml);
+
+      // 9. 生成新 docx
+      setStatus('loading', '正在打包合并后的文档…');
+      var outBlob = await baseZip.generateAsync({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      });
+
+      var url = URL.createObjectURL(outBlob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'merged-' + Date.now() + '.docx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+
+      setStatus('success', '合并完成，Word 已开始下载');
+    } catch (err) {
+      console.error(err);
+      setStatus('error', '失败：' + (err.message || err));
+    } finally {
+      mergeBtn.disabled = false;
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

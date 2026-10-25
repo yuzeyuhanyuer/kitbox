@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PDF 拆分为图片</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    background: #fafafa;
+    margin: 0;
+    padding: 24px;
+    color: #333;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  .drop {
+    border: 2px dashed #bbb;
+    border-radius: 6px;
+    padding: 36px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.2s;
+  }
+  .drop:hover, .drop.over {
+    border-color: #4a90d9;
+    background: #f0f7ff;
+    color: #4a90d9;
+  }
+  .drop input { display: none; }
+
+  .options {
+    margin-top: 16px;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 13px;
+    color: #555;
+  }
+  .options label { cursor: pointer; user-select: none; }
+  .options select, .options input[type="number"] {
+    padding: 4px 8px;
+    font-size: 13px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+  }
+  .options input[type="number"] { width: 80px; }
+
+  .toolbar {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 9px 18px;
+    background: #4a90d9;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #357ab8; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.ghost {
+    background: #fff;
+    color: #4a90d9;
+    border: 1px solid #4a90d9;
+  }
+  button.ghost:hover { background: #f0f7ff; }
+
+  #status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    display: none;
+    line-height: 1.6;
+  }
+  #status.loading { display: block; background: #e8f4fd; color: #2a6fa8; }
+  #status.error   { display: block; background: #fdecea; color: #c0392b; }
+  #status.success { display: block; background: #eafaf1; color: #27ae60; }
+
+  #preview {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+  }
+  #preview .thumb {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    text-align: center;
+  }
+  #preview .thumb img {
+    width: 100%;
+    height: 140px;
+    object-fit: contain;
+    display: block;
+    background: #f7f7f7;
+  }
+  #preview .thumb .label {
+    font-size: 11px;
+    color: #888;
+    padding: 4px 0;
+    border-top: 1px solid #f0f0f0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".pdf">
+    <div>点击选择 PDF，或拖到这里</div>
+  </div>
+
+  <div class="options">
+    <label>
+      图片格式：
+      <select id="format">
+        <option value="image/png" selected>PNG（无损，体积大）</option>
+        <option value="image/jpeg">JPEG（有损，体积小）</option>
+      </select>
+    </label>
+    <label>
+      缩放：
+      <select id="scale">
+        <option value="1">1x（原始清晰度）</option>
+        <option value="1.5" selected>1.5x</option>
+        <option value="2">2x（更清晰，更慢）</option>
+        <option value="3">3x（很慢，仅老机器慎用）</option>
+      </select>
+    </label>
+    <label id="qualityWrap" style="display:none;">
+      JPEG 质量：
+      <input type="number" id="quality" min="1" max="100" value="85">
+    </label>
+  </div>
+
+  <div class="toolbar">
+    <button id="convertBtn" disabled>拆分并下载 ZIP</button>
+    <button class="ghost" id="clearBtn" disabled>清空</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="preview"></div>
+</div>
+
+<!-- pdf.js：把 PDF 每页渲染到 Canvas -->
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<!-- JSZip：把多张图片打包成 zip -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+<script>
+(function () {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+
+  var drop       = document.getElementById('drop');
+  var fileEl     = document.getElementById('file');
+  var convertBtn = document.getElementById('convertBtn');
+  var clearBtn   = document.getElementById('clearBtn');
+  var statusEl   = document.getElementById('status');
+  var preview    = document.getElementById('preview');
+  var formatEl   = document.getElementById('format');
+  var scaleEl    = document.getElementById('scale');
+  var qualityEl  = document.getElementById('quality');
+  var qualityWrap= document.getElementById('qualityWrap');
+
+  var picked = null;
+
+  function setStatus(type, msg) {
+    statusEl.className = type;
+    statusEl.textContent = msg;
+  }
+  function clearStatus() {
+    statusEl.className = '';
+    statusEl.textContent = '';
+  }
+
+  // 切换格式时显示/隐藏质量输入
+  formatEl.addEventListener('change', function () {
+    qualityWrap.style.display = formatEl.value === 'image/jpeg' ? 'inline-block' : 'none';
+  });
+
+  // ---------- 文件选择 ----------
+  drop.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function (e) {
+    if (e.target.files.length) pick(e.target.files[0]);
+  });
+  ['dragenter', 'dragover'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+    });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) pick(e.dataTransfer.files[0]);
+  });
+
+  function pick(f) {
+    if (!/\.pdf$/i.test(f.name)) {
+      setStatus('error', '只支持 .pdf 文件');
+      return;
+    }
+    picked = f;
+    convertBtn.disabled = false;
+    clearBtn.disabled = false;
+    preview.innerHTML = '';
+    setStatus('loading', '已选择：' + f.name);
+  }
+
+  clearBtn.addEventListener('click', function () {
+    picked = null;
+    convertBtn.disabled = true;
+    clearBtn.disabled = true;
+    preview.innerHTML = '';
+    clearStatus();
+    fileEl.value = '';
+  });
+
+  // ---------- 拆分主流程 ----------
+  convertBtn.addEventListener('click', async function () {
+    if (!picked) return;
+    convertBtn.disabled = true;
+    preview.innerHTML = '';
+
+    try {
+      var buf = await picked.arrayBuffer();
+      setStatus('loading', '正在加载 PDF…');
+      var pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+      var mime = formatEl.value;
+      var scale = parseFloat(scaleEl.value) || 1.5;
+      var quality = (parseInt(qualityEl.value, 10) || 85) / 100;
+      var ext = mime === 'image/png' ? 'png' : 'jpg';
+
+      var zip = new JSZip();
+      var folderName = picked.name.replace(/\.pdf$/i, '');
+      var folder = zip.folder(folderName);
+
+      for (var i = 1; i <= pdf.numPages; i++) {
+        setStatus('loading', '正在渲染第 ' + i + ' / ' + pdf.numPages + ' 页…');
+
+        var page = await pdf.getPage(i);
+        var viewport = page.getViewport({ scale: scale });
+
+        var canvas = document.createElement('canvas');
+        canvas.width  = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        var ctx = canvas.getContext('2d');
+
+        // 白底，避免 PNG 透明变黑
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        await page.render({
+          canvasContext: ctx,
+          viewport: viewport
+        }).promise;
+
+        var blob = await new Promise(function (resolve) {
+          canvas.toBlob(resolve, mime, quality);
+        });
+
+        var filename = 'page-' + String(i).padStart(3, '0') + '.' + ext;
+        folder.file(filename, blob);
+
+        // 预览缩略图
+        var url = URL.createObjectURL(blob);
+        var thumbEl = document.createElement('div');
+        thumbEl.className = 'thumb';
+        thumbEl.innerHTML =
+          '<img src="' + url + '" alt="">' +
+          '<div class="label">第 ' + i + ' 页</div>';
+        preview.appendChild(thumbEl);
+      }
+
+      setStatus('loading', '正在打包 ZIP…');
+      var zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 1 } // 图片本身已压缩，ZIP 再压收益小
+      });
+
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(zipBlob);
+      a.download = folderName + '-images.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+
+      setStatus('success', '完成，ZIP 已开始下载');
+    } catch (err) {
+      console.error(err);
+      setStatus('error', '失败：' + (err.message || err));
+    } finally {
+      convertBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
